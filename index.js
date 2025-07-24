@@ -1,46 +1,74 @@
 const express = require("express");
-const puppeteer = require("puppeteer");
+const axios = require("axios");
+const cheerio = require("cheerio");
+const cors = require("cors");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+app.use(cors());
 
-app.get("/buscar", async (req, res) => {
-  const query = req.query.q;
-  if (!query) return res.status(400).send("Debes incluir un nombre con ?q=NombreApellido");
+/**
+ * Ruta para consultar licencia de conducir (nombre + número de licencia)
+ * Ejemplo: /licencia?num=F12345678
+ */
+app.get("/licencia", async (req, res) => {
+  const num = req.query.num;
 
-  const browser = await puppeteer.launch({ headless: true });
-  const page = await browser.newPage();
+  if (!num) return res.status(400).json({ error: "Falta el número de licencia (?num=...)" });
 
-  // Usa tu cookie
-  await page.setCookie({
-    name: ".AspNetCore.Session",
-    value: ".eJw9zUEKwyAQQNG7zNoEq4kxrnKBbkop3YWhDkHQGIyWQunda7Po8sOD_wYK6DwYuKj7Wdwmixk3SqV9xAAM6LW5RPuMuRLBRd_woRHd9TQaqYyUrda8V7pKZ8HIsRsUAx-XhaxbweRUiMGKgf6HSlP0vy47pVpP9M7ORxz-8wWvvyxx.aIG0AA.3nPoAgSldgnur1OfmlXOxOWQnFc",
-    domain: "xdataperu.com",
-    path: "/",
-    httpOnly: true,
-    secure: true
-  });
+  try {
+    const response = await axios.get(`https://licencias.mtc.gob.pe/#/index`);
+    // ⚠️ Este endpoint es SPA (Angular) y no se puede scrapear directamente con axios.
+    // Alternativa: buscar API interna o usar puppeteer para simular navegador.
 
-  await page.goto("https://xdataperu.com/buscarnombres", { waitUntil: "networkidle0" });
+    return res.json({ error: "Esta página necesita Puppeteer (SPA Angular)" });
+  } catch (err) {
+    res.status(500).json({ error: "Error al consultar licencia", detalle: err.message });
+  }
+});
 
-  // Completa el formulario
-  await page.type("#nombre", query); // Ajusta el selector si es diferente
-  await Promise.all([
-    page.click("#btnBuscar"), // Ajusta el selector si es diferente
-    page.waitForNavigation({ waitUntil: "networkidle0" }),
-  ]);
+/**
+ * Ruta para consultar SOAT por placa
+ * Ejemplo: /soat?placa=ABC123
+ */
+app.get("/soat", async (req, res) => {
+  const placa = req.query.placa;
 
-  // Extraer tabla
-  const resultados = await page.evaluate(() => {
-    const filas = Array.from(document.querySelectorAll("table tbody tr"));
-    return filas.map(fila =>
-      Array.from(fila.querySelectorAll("td")).map(td => td.innerText.trim())
-    );
-  });
+  if (!placa) return res.status(400).json({ error: "Falta la placa (?placa=...)" });
 
-  await browser.close();
+  try {
+    const response = await axios.post("https://www2.sbs.gob.pe/soat/consultar.aspx", new URLSearchParams({
+      __EVENTTARGET: "",
+      __EVENTARGUMENT: "",
+      txtPlaca: placa.toUpperCase(),
+      btnBuscar: "Buscar"
+    }), {
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "User-Agent": "Mozilla/5.0"
+      }
+    });
 
-  res.json({ query, resultados });
+    const $ = cheerio.load(response.data);
+
+    const resultados = [];
+    $("#dgResultado tr").each((i, row) => {
+      const cols = $(row).find("td").map((j, el) => $(el).text().trim()).get();
+      if (cols.length) resultados.push(cols);
+    });
+
+    if (resultados.length === 0) {
+      return res.json({ placa, mensaje: "Sin resultados", resultados: [] });
+    }
+
+    res.json({ placa, resultados });
+  } catch (err) {
+    res.status(500).json({ error: "Error al obtener SOAT", detalle: err.message });
+  }
+});
+
+app.get("/", (req, res) => {
+  res.send("API funcionando: /soat?placa=ABC123 y /licencia?num=F12345678");
 });
 
 app.listen(PORT, () => {
